@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini Maps</title>
+<meta name="description" content="Play with a mini Google Maps: add traffic jams, watch the colours change and see the route switch.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Mini Maps</h1>
+  <p class="banner"><b class="short">Purple</b> is the shortest route, <b class="fast">blue</b> is the fastest. Traffic here is simulated.</p>
+</header>
+<main>
+  <div id="map"></div>
+  <aside>
+    <section class="controls">
+      <label>A · Start <select id="start"></select></label>
+      <label>B · Destination <select id="goal"></select></label>
+      <p class="hint" id="hint">Click a road to add or clear a jam. Click anywhere else on the map to move A.</p>
+      <table class="stats">
+        <tr class="short"><th>Shortest</th><td id="short-km"></td><td id="short-min"></td></tr>
+        <tr class="fast"><th>Fastest</th><td id="fast-km"></td><td id="fast-min"></td></tr>
+      </table>
+      <div class="buttons">
+        <button id="wagon">Send the 99-phone wagon</button>
+        <button id="clear">Clear all jams</button>
+      </div>
+      <label>Today's slowdown fades in <output id="fade-out">10</output> min
+        <input id="fade" type="range" min="1" max="60" value="10">
+      </label>
+    </section>
+
+    <section class="how">
+      <h2>How it works</h2>
+      <details>
+        <summary>1 · Where am I? (GPS)</summary>
+        <p>Your phone hears signals from satellites. Each signal says how far away that satellite is, so the phone sits somewhere on a circle around it. Three circles meet at one point: that's you. Drag the satellites.</p>
+        <svg id="gps" viewBox="0 0 300 200" aria-label="Three satellites with distance circles meeting at the phone"></svg>
+        <pre><code data-fn="trilaterate"></code></pre>
+      </details>
+      <details>
+        <summary>2 · Phones send their speed</summary>
+        <p>Phones with location turned on send anonymous pings: which road, and how fast. Here the pings are fake. A jam sends slow pings. The 99-phone wagon sends 99 pings at walking pace, like Simon Weckert's 2020 stunt in Berlin.</p>
+        <pre><code data-fn="make_pings jam_pings wagon_pings"></code></pre>
+      </details>
+      <details>
+        <summary>3 · The live speed of each road</summary>
+        <p>Average all the pings on a road. A few fast cars can't beat 99 slow phones, so the wagon makes an empty road look jammed.</p>
+        <pre><code data-fn="live_speeds"></code></pre>
+      </details>
+      <details>
+        <summary>4 · Green, orange, red</summary>
+        <p>Compare the live speed with the speed the road has when it's empty. Under 75% turns orange. Under 40% turns red.</p>
+        <pre><code data-fn="colour"></code></pre>
+      </details>
+      <details>
+        <summary>5 · Predicting your arrival time</summary>
+        <p>A jam now may be gone when you get there. The prediction slides today's live speed back to the usual speed as the minutes pass. Move the fade slider and watch the fastest route change.</p>
+        <pre><code data-fn="predict_speed"></code></pre>
+      </details>
+      <details>
+        <summary>6 · The best route</summary>
+        <p>Dijkstra's algorithm grows outward from the start, always taking the cheapest junction next. It runs twice: once with kilometres as the cost (shortest), once with predicted minutes (fastest). Plain Dijkstra is fine for 2 km. Real engines use Contraction Hierarchies or multi-level techniques to search whole continents in milliseconds.</p>
+        <pre><code data-fn="best_route"></code></pre>
+      </details>
+    </section>
+
+    <footer>
+      Not a navigation app. Traffic is simulated. The page never asks for your location.<br>
+      <a href="#">Read the blog</a> · <a href="#">Code on GitHub</a>
+    </footer>
+  </aside>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="js/core.js"></script>
+<script src="js/roads.js"></script>
+<script src="js/traffic.js"></script>
+<script>
+// Map tiles: change this one line to switch provider.
+const TILES = ["https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }];
+const AREA = [[28.6225, 77.2065], [28.6405, 77.2269]]; // Connaught Place, New Delhi; matches data/area.geojson
+const LANDMARKS = {
+  "Gurudwara Bangla Sahib": [28.6264, 77.2091],
+  "Agrasen ki Baoli": [28.6262, 77.225],
+  "Jantar Mantar": [28.6271, 77.2166],
+  "Rajiv Chowk (Central Park)": [28.6328, 77.2197],
+  "Shivaji Stadium": [28.6317, 77.212],
+  "Barakhamba Road": [28.6298, 77.225],
+};
+const COLOURS = { green: "#34a853", orange: "#f9a825", red: "#d93025" };
+const ROUTE_COLOURS = { short: "#8e24aa", fast: "#1a73e8" };
+
+const map = L.map("map", { renderer: L.canvas({ tolerance: 6 }), maxBounds: L.latLngBounds(AREA).pad(0.5) }).fitBounds(AREA);
+L.tileLayer(...TILES).addTo(map);
+const label = L.control({ position: "topright" });
+label.onAdd = () => Object.assign(L.DomUtil.create("div", "sim-label"), { textContent: "Simulated traffic" });
+label.addTo(map);
+
+const $ = id => document.getElementById(id);
+const selects = { A: $("start"), B: $("goal") };
+const route_layer = L.layerGroup().addTo(map), wagon_layer = L.layerGroup().addTo(map);
+const layers = {}, pins = {}, node_of = {}, jammed = new Set();
+let graph, usual, pings, fastest, next = "A";
+
+fetch("data/area.geojson").then(r => r.json()).then(geojson => {
+  graph = build_graph(geojson);
+  usual = usual_speeds(graph.roads);
+  pings = make_pings(graph.roads, usual);
+  for (const id in graph.roads) {
+    layers[id] = L.polyline(graph.roads[id].points, { weight: 4, bubblingMouseEvents: false })
+      .bindTooltip(graph.roads[id].name, { sticky: true })
+      .on("click", () => toggle_jam(id))
+      .addTo(map);
+  }
+  for (const which of ["A", "B"]) {
+    selects[which].innerHTML = `<option value="">Point on the map</option>` + Object.keys(LANDMARKS).map(n => `<option>${n}</option>`).join("");
+    selects[which].onchange = () => { if (selects[which].value) set_end(which, LANDMARKS[selects[which].value], selects[which].value); };
+    pins[which] = L.marker(AREA[0], { draggable: true, icon: L.divIcon({ className: "pin", html: which, iconSize: [26, 26] }) })
+      .on("dragend", e => set_end(which, [e.target.getLatLng().lat, e.target.getLatLng().lng]))
+      .addTo(map);
+  }
+  set_end("A", LANDMARKS["Gurudwara Bangla Sahib"], "Gurudwara Bangla Sahib", false);
+  set_end("B", LANDMARKS["Agrasen ki Baoli"], "Agrasen ki Baoli");
+  map.on("click", e => {
+    set_end(next, [e.latlng.lat, e.latlng.lng]);
+    next = next === "A" ? "B" : "A";
+    $("hint").textContent = `Click a road to add or clear a jam. Click anywhere else on the map to move ${next}.`;
+  });
+});
+
+function set_end(which, point, landmark = "", redraw = true) {
+  node_of[which] = nearest_node(graph, point);
+  pins[which].setLatLng(graph.nodes[node_of[which]]);
+  selects[which].value = landmark;
+  if (redraw) update();
+}
+
+function toggle_jam(id) {
+  pings = pings.filter(p => p.road !== id);
+  if (jammed.delete(id)) pings.push(...make_pings({ [id]: graph.roads[id] }, usual));
+  else { jammed.add(id); pings.push(...jam_pings(id)); }
+  update();
+}
+
+$("wagon").onclick = () => {
+  if (!fastest.edges.length) return;
+  const edge = fastest.edges[Math.floor(fastest.edges.length / 2)];
+  pings.push(...wagon_pings(edge.road));
+  jammed.add(edge.road);
+  L.marker(graph.nodes[edge.to], { interactive: false, icon: L.divIcon({ className: "wagon", html: "🛒 99 phones", iconSize: [90, 22] }) }).addTo(wagon_layer);
+  update();
+};
+
+$("clear").onclick = () => {
+  pings = make_pings(graph.roads, usual);
+  jammed.clear();
+  wagon_layer.clearLayers();
+  update();
+};
+
+$("fade").oninput = () => { $("fade-out").textContent = $("fade").value; update(); };
+
+function update() {
+  const started = performance.now();
+  const live = live_speeds(pings);
+  for (const id in layers) {
+    layers[id].setStyle({ color: COLOURS[colour(live[id], graph.roads[id].free_flow)], weight: jammed.has(id) ? 7 : 4 });
+  }
+  const fade = +$("fade").value;
+  const minutes = (edge, so_far) => edge.km / predict_speed(live[edge.road], usual[edge.road], so_far, fade) * 60;
+  const shortest = best_route(graph, node_of.A, node_of.B, edge => edge.km);
+  fastest = best_route(graph, node_of.A, node_of.B, minutes);
+  route_layer.clearLayers();
+  show(shortest, "short", 10, minutes);
+  show(fastest, "fast", 5, minutes);
+  console.log(`Update took ${(performance.now() - started).toFixed(1)} ms`);
+}
+
+function show(route, kind, weight, minutes) {
+  const points = [graph.nodes[node_of.A], ...route.edges.map(e => graph.nodes[e.to])];
+  L.polyline(points, { color: ROUTE_COLOURS[kind], weight, opacity: 0.8, interactive: false }).addTo(route_layer);
+  let km = 0, min = 0;
+  for (const e of route.edges) { min += minutes(e, min); km += e.km; }
+  $(kind + "-km").textContent = km.toFixed(2) + " km";
+  $(kind + "-min").textContent = min.toFixed(1) + " min";
+}
+
+// "Show me the code": print the source of the functions that actually run.
+for (const el of document.querySelectorAll("code[data-fn]")) {
+  el.textContent = el.dataset.fn.split(" ").map(name => window[name].toString()).join("\n\n");
+}
+
+// GPS mini demo: radii come from the hidden phone; trilaterate() finds it again.
+const gps = $("gps"), PHONE = [150, 120], sats = [[40, 40], [260, 30], [170, 190]];
+let dragging = -1;
+const svg_point = e => {
+  const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(gps.getScreenCTM().inverse());
+  return [Math.max(0, Math.min(300, p.x)), Math.max(0, Math.min(200, p.y))];
+};
+function draw_gps() {
+  const circles = sats.map(([x, y]) => [x, y, Math.hypot(x - PHONE[0], y - PHONE[1])]);
+  const [px, py] = trilaterate(...circles);
+  gps.innerHTML = circles.map(([x, y, r]) => `<circle class="ring" cx="${x}" cy="${y}" r="${r}"/><text class="sat" x="${x}" y="${y}">🛰️</text>`).join("")
+    + (isFinite(px) ? `<circle class="phone" cx="${px}" cy="${py}" r="6"/>` : "");
+}
+gps.onpointerdown = e => {
+  const [x, y] = svg_point(e);
+  dragging = sats.findIndex(([sx, sy]) => Math.hypot(sx - x, sy - y) < 20);
+  if (dragging >= 0) gps.setPointerCapture(e.pointerId);
+};
+gps.onpointermove = e => { if (dragging >= 0) { sats[dragging] = svg_point(e); draw_gps(); } };
+gps.onpointerup = () => { dragging = -1; };
+draw_gps();
+</script>
+</body>
+</html>
