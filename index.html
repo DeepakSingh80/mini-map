@@ -70,10 +70,51 @@
 
     <footer>
       Not a navigation app. Traffic is simulated. The page never asks for your location.<br>
-      <a href="#">Read the blog</a> · <a href="#">Code on GitHub</a>
+      <a href="#">Read the blog</a> · <a href="https://github.com/DeepakSingh80/mini-map">Code on GitHub</a>
     </footer>
   </aside>
 </main>
+
+<section class="algo">
+  <h2>The routing algorithm: Dijkstra on a road graph</h2>
+  <ol>
+    <li>
+      <h3>1 · Roads become nodes and edges</h3>
+      <p>The map is about 2 km of OpenStreetMap roads: 449 roads, each a line of GPS points. Every point becomes a <b>node</b>. A point shared by two roads is a <b>junction</b> (553 of them). Each pair of neighbouring points becomes an <b>edge</b> in both directions, priced by its real length (haversine distance). Total: 2,626 nodes and 5,722 edges.</p>
+      <svg viewBox="0 0 300 90" aria-label="Two roads crossing: points become nodes, the shared point is a junction">
+        <path d="M20 70 L90 50 L150 45 L220 30 L280 20" class="road"/>
+        <path d="M150 5 L150 45 L155 85" class="road"/>
+        <g class="node"><circle cx="20" cy="70" r="5"/><circle cx="90" cy="50" r="5"/><circle cx="220" cy="30" r="5"/><circle cx="280" cy="20" r="5"/><circle cx="150" cy="5" r="5"/><circle cx="155" cy="85" r="5"/></g>
+        <circle cx="150" cy="45" r="8" class="junction"/>
+        <text x="160" y="62">junction</text><text x="40" y="52">edge = km</text>
+      </svg>
+    </li>
+    <li>
+      <h3>2 · Clean the graph, snap A and B</h3>
+      <p>Roads cut by the edge of the box leave small islands. A flood fill keeps the biggest connected piece (2,602 nodes), so every pair of points can be routed. When you pick A or B, the pin snaps to the nearest node on that piece.</p>
+    </li>
+    <li>
+      <h3>3 · Price each edge</h3>
+      <p>The same search runs twice with a different cost per edge:</p>
+      <ul>
+        <li><b class="short">Shortest</b>: cost = edge length in km.</li>
+        <li><b class="fast">Fastest</b>: cost = km ÷ predicted speed × 60, in minutes. The predicted speed starts at the live speed (average of phone pings) and fades back to the usual speed as the minutes you have already driven grow.</li>
+      </ul>
+    </li>
+    <li>
+      <h3>4 · Dijkstra finds the cheapest path</h3>
+      <ol class="steps">
+        <li>Give A a cost of 0. Every other node is unknown.</li>
+        <li>Take the unvisited node with the lowest cost so far.</li>
+        <li>For each edge out of it, compute cost so far + edge cost. Keep it if it beats the neighbour's best.</li>
+        <li>Remember which edge gave each best cost.</li>
+        <li>Stop when B is taken. Walk the remembered edges back from B to A to get the route.</li>
+      </ol>
+      <p>Dijkstra is exact because every edge cost is positive: once a node is taken, no later path can be cheaper. One run takes a few milliseconds here.</p>
+    </li>
+  </ol>
+  <p class="limits"><b>Simplifications:</b> every road is two-way (one-way tags are ignored). The frontier is a plain list scan, not a heap, which is fine for 2,600 nodes. Real engines like Google Maps use Contraction Hierarchies or multi-level graphs to search whole continents in milliseconds.</p>
+</section>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="js/core.js"></script>
