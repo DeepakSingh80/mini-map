@@ -116,6 +116,12 @@
       <p class="live">Now: the shortest search explored <b id="dj-short"></b> nodes and the fastest search explored <b id="dj-fast"></b>, out of <b id="dj-total"></b>. The routes use <b id="dj-short-edges"></b> and <b id="dj-fast-edges"></b> edges. Both searches took <b id="dj-ms"></b> ms.</p>
     </li>
   </ol>
+  <div class="calc">
+    <h3>Live calculation for the <select id="calc-route"><option value="fast">fastest route</option><option value="short">shortest route</option></select></h3>
+    <p>Each row is one road on the route, split into its node-to-node edges. OpenStreetMap stores long streets in pieces, so a name can repeat. The white dots on the map are the nodes. Minutes add up edge by edge, so each road's predicted speed depends on when you reach it.</p>
+    <div class="table-wrap"><table id="calc-table"></table></div>
+    <p class="live" id="calc-example"></p>
+  </div>
   <p class="limits"><b>Simplifications:</b> every road is two-way (one-way tags are ignored). The frontier is a plain list scan, not a heap, which is fine for 2,600 nodes. Real engines like Google Maps use Contraction Hierarchies or multi-level graphs to search whole continents in milliseconds.</p>
 </section>
 
@@ -146,9 +152,9 @@ label.addTo(map);
 
 const $ = id => document.getElementById(id);
 const selects = { A: $("start"), B: $("goal") };
-const route_layer = L.layerGroup().addTo(map), wagon_layer = L.layerGroup().addTo(map);
+const route_layer = L.layerGroup().addTo(map), wagon_layer = L.layerGroup().addTo(map), node_layer = L.layerGroup().addTo(map);
 const layers = {}, pins = {}, node_of = {}, jammed = new Set();
-let graph, usual, pings, fastest, next = "A";
+let graph, usual, pings, fastest, calc, next = "A";
 
 fetch("data/area.geojson").then(r => r.json()).then(geojson => {
   graph = build_graph(geojson);
@@ -246,6 +252,8 @@ function update() {
   route_layer.clearLayers();
   show(shortest, "short", 10, minutes);
   show(fastest, "fast", 5, minutes);
+  calc = { routes: { short: shortest, fast: fastest }, live, fade };
+  show_calc();
   console.log(`Update took ${(performance.now() - started).toFixed(1)} ms`);
 }
 
@@ -257,6 +265,33 @@ function show(route, kind, weight, minutes) {
   $(kind + "-km").textContent = km.toFixed(2) + " km";
   $(kind + "-min").textContent = min.toFixed(1) + " min";
 }
+
+// Rebuild the cost one edge at a time, grouped by road, exactly as best_route priced it.
+const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+function show_calc() {
+  const { routes, live, fade } = calc, kind = $("calc-route").value, route = routes[kind];
+  const rows = [];
+  let t = 0;
+  node_layer.clearLayers();
+  const dot = (id, text) => L.circleMarker(graph.nodes[id], { radius: 3, color: ROUTE_COLOURS[kind], weight: 1.5, fillColor: "#fff", fillOpacity: 1 }).bindTooltip(text).addTo(node_layer);
+  dot(node_of.A, "A · node 0 · 0.00 min");
+  route.edges.forEach((e, i) => {
+    const predicted = predict_speed(live[e.road], usual[e.road], t, fade), min = e.km / predicted * 60;
+    let row = rows.at(-1);
+    if (!row || row.road !== e.road) rows.push(row = { road: e.road, t, edges: 0, km: 0, min: 0, first: { km: e.km, predicted, min } });
+    row.edges++; row.km += e.km; row.min += min; t += min;
+    dot(e.to, `node ${i + 1} · ${graph.roads[e.road].name} · ${t.toFixed(2)} min`);
+  });
+  const f = (n, d = 1) => n.toFixed(d);
+  $("calc-table").innerHTML = `<tr><th>#</th><th>Road</th><th>Edges</th><th>km</th><th>Live km/h</th><th>Usual km/h</th><th>Reach at min</th><th>Predicted km/h</th><th>Minutes</th></tr>`
+    + rows.map((r, i) => `<tr><td>${i + 1}</td><td><span class="dot" style="background:${COLOURS[colour(live[r.road], graph.roads[r.road].free_flow)]}"></span>${esc(graph.roads[r.road].name)}</td><td>${r.edges}</td><td>${f(r.km, 3)}</td><td>${f(live[r.road])}</td><td>${f(usual[r.road])}</td><td>${f(r.t, 2)}</td><td>${f(r.km / r.min * 60)}</td><td>${f(r.min, 2)}</td></tr>`).join("")
+    + `<tr class="total"><td></td><td>Total</td><td>${route.edges.length}</td><td>${f(route.edges.reduce((s, e) => s + e.km, 0), 3)}</td><td colspan="3"></td><td></td><td>${f(t, 2)}</td></tr>`;
+  const r = rows.reduce((a, b) => (b.min / b.km > a.min / a.km ? b : a), rows[0]);
+  $("calc-example").innerHTML = !r ? "A and B are on the same node." : `Worked example, the slowest road <b>${esc(graph.roads[r.road].name)}</b>: you reach it at t = ${f(r.t, 2)} min.<br>`
+    + `predicted = usual + (live − usual) × e<sup>−t / fade</sup> = ${f(usual[r.road])} + (${f(live[r.road])} − ${f(usual[r.road])}) × e<sup>−${f(r.t, 2)} / ${fade}</sup> = <b>${f(r.first.predicted)} km/h</b><br>`
+    + `first edge: ${f(r.first.km, 3)} km ÷ ${f(r.first.predicted)} km/h × 60 = <b>${f(r.first.min, 3)} min</b>. All ${r.edges} edges on this road add up to <b>${f(r.min, 2)} min</b>.`;
+}
+$("calc-route").onchange = show_calc;
 
 // "Show me the code": print the source of the functions that actually run.
 for (const el of document.querySelectorAll("code[data-fn]")) {

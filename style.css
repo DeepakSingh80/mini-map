@@ -61,6 +61,13 @@ footer { margin-top: 20px; font-size: 13px; color: var(--muted); }
 .algo .junction { fill: var(--fast); }
 .algo text { font-size: 11px; fill: var(--muted); }
 .algo .live { background: #e8f0fe; border-radius: 4px; padding: 6px 8px; font-size: 14px; }
+.calc select { display: inline-block; width: auto; font: inherit; padding: 2px 4px; }
+.table-wrap { overflow-x: auto; }
+#calc-table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+#calc-table th, #calc-table td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+#calc-table th:nth-child(2), #calc-table td:nth-child(2) { text-align: left; white-space: normal; }
+#calc-table .total td { font-weight: 700; border-bottom: 0; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .limits { color: var(--muted); font-size: 14px; }
 
 @media (max-width: 760px) {
