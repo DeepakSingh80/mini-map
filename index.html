@@ -80,7 +80,7 @@
   <ol>
     <li>
       <h3>1 · Roads become nodes and edges</h3>
-      <p>The map is about 2 km of OpenStreetMap roads: 449 roads, each a line of GPS points. Every point becomes a <b>node</b>. A point shared by two roads is a <b>junction</b> (553 of them). Each pair of neighbouring points becomes an <b>edge</b> in both directions, priced by its real length (haversine distance). Total: 2,626 nodes and 5,722 edges.</p>
+      <p>The map is about 2 km of OpenStreetMap roads: <b id="n-roads"></b> roads, each a line of GPS points. Every point becomes a <b>node</b>. A point shared by two roads is a <b>junction</b> (<b id="n-junctions"></b> of them). Each pair of neighbouring points becomes an <b>edge</b> in both directions, priced by its real length (haversine distance). Total: <b id="n-nodes"></b> nodes and <b id="n-edges"></b> edges.</p>
       <svg viewBox="0 0 300 90" aria-label="Two roads crossing: points become nodes, the shared point is a junction">
         <path d="M20 70 L90 50 L150 45 L220 30 L280 20" class="road"/>
         <path d="M150 5 L150 45 L155 85" class="road"/>
@@ -91,7 +91,8 @@
     </li>
     <li>
       <h3>2 · Clean the graph, snap A and B</h3>
-      <p>Roads cut by the edge of the box leave small islands. A flood fill keeps the biggest connected piece (2,602 nodes), so every pair of points can be routed. When you pick A or B, the pin snaps to the nearest node on that piece.</p>
+      <p>Roads cut by the edge of the box leave small islands. A flood fill keeps the biggest connected piece (<b id="n-main"></b> nodes, <b id="n-dropped"></b> dropped), so every pair of points can be routed. When you pick A or B, the pin snaps to the nearest node on that piece.</p>
+      <p class="live">Now: A snaps to node <code id="snap-A"></code>, <b id="snap-A-m"></b> m from your pick. B snaps to node <code id="snap-B"></code>, <b id="snap-B-m"></b> m away.</p>
     </li>
     <li>
       <h3>3 · Price each edge</h3>
@@ -100,6 +101,7 @@
         <li><b class="short">Shortest</b>: cost = edge length in km.</li>
         <li><b class="fast">Fastest</b>: cost = km ÷ predicted speed × 60, in minutes. The predicted speed starts at the live speed (average of phone pings) and fades back to the usual speed as the minutes you have already driven grow.</li>
       </ul>
+      <p class="live">Now: <b id="live-pings"></b> phone pings, <b id="live-jams"></b> jammed roads, fade <b id="live-fade"></b> min. Cheapest total cost: <b id="cost-short"></b> km (shortest), <b id="cost-fast"></b> min (fastest).</p>
     </li>
     <li>
       <h3>4 · Dijkstra finds the cheapest path</h3>
@@ -110,7 +112,8 @@
         <li>Remember which edge gave each best cost.</li>
         <li>Stop when B is taken. Walk the remembered edges back from B to A to get the route.</li>
       </ol>
-      <p>Dijkstra is exact because every edge cost is positive: once a node is taken, no later path can be cheaper. One run takes a few milliseconds here.</p>
+      <p>Dijkstra is exact because every edge cost is positive: once a node is taken, no later path can be cheaper.</p>
+      <p class="live">Now: the shortest search explored <b id="dj-short"></b> nodes and the fastest search explored <b id="dj-fast"></b>, out of <b id="dj-total"></b>. The routes use <b id="dj-short-edges"></b> and <b id="dj-fast-edges"></b> edges. Both searches took <b id="dj-ms"></b> ms.</p>
     </li>
   </ol>
   <p class="limits"><b>Simplifications:</b> every road is two-way (one-way tags are ignored). The frontier is a plain list scan, not a heap, which is fine for 2,600 nodes. Real engines like Google Maps use Contraction Hierarchies or multi-level graphs to search whole continents in milliseconds.</p>
@@ -151,6 +154,16 @@ fetch("data/area.geojson").then(r => r.json()).then(geojson => {
   graph = build_graph(geojson);
   usual = usual_speeds(graph.roads);
   pings = make_pings(graph.roads, usual);
+  const nodes = Object.keys(graph.nodes).length;
+  Object.entries({
+    "n-roads": Object.keys(graph.roads).length,
+    "n-junctions": Object.values(graph.edges).filter(es => new Set(es.map(e => e.road)).size > 1).length,
+    "n-nodes": nodes,
+    "n-edges": Object.values(graph.edges).reduce((n, es) => n + es.length, 0),
+    "n-main": graph.main.size,
+    "n-dropped": nodes - graph.main.size,
+    "dj-total": graph.main.size,
+  }).forEach(([id, n]) => $(id).textContent = n.toLocaleString());
   for (const id in graph.roads) {
     layers[id] = L.polyline(graph.roads[id].points, { weight: 4, bubblingMouseEvents: false })
       .bindTooltip(graph.roads[id].name, { sticky: true })
@@ -176,6 +189,8 @@ fetch("data/area.geojson").then(r => r.json()).then(geojson => {
 function set_end(which, point, landmark = "", redraw = true) {
   node_of[which] = nearest_node(graph, point);
   pins[which].setLatLng(graph.nodes[node_of[which]]);
+  $("snap-" + which).textContent = graph.nodes[node_of[which]].map(x => x.toFixed(5)).join(", ");
+  $("snap-" + which + "-m").textContent = Math.round(distance_km(graph.nodes[node_of[which]], point) * 1000);
   selects[which].value = landmark;
   if (redraw) update();
 }
@@ -213,8 +228,21 @@ function update() {
   }
   const fade = +$("fade").value;
   const minutes = (edge, so_far) => edge.km / predict_speed(live[edge.road], usual[edge.road], so_far, fade) * 60;
+  const searching = performance.now();
   const shortest = best_route(graph, node_of.A, node_of.B, edge => edge.km);
   fastest = best_route(graph, node_of.A, node_of.B, minutes);
+  Object.entries({
+    "dj-ms": (performance.now() - searching).toFixed(1),
+    "dj-short": shortest.explored.toLocaleString(),
+    "dj-fast": fastest.explored.toLocaleString(),
+    "dj-short-edges": shortest.edges.length,
+    "dj-fast-edges": fastest.edges.length,
+    "cost-short": shortest.cost.toFixed(2),
+    "cost-fast": fastest.cost.toFixed(1),
+    "live-pings": pings.length.toLocaleString(),
+    "live-jams": jammed.size,
+    "live-fade": fade,
+  }).forEach(([id, v]) => $(id).textContent = v);
   route_layer.clearLayers();
   show(shortest, "short", 10, minutes);
   show(fastest, "fast", 5, minutes);

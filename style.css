@@ -60,6 +60,7 @@ footer { margin-top: 20px; font-size: 13px; color: var(--muted); }
 .algo .node circle { fill: #fff; stroke: var(--ink); stroke-width: 2; }
 .algo .junction { fill: var(--fast); }
 .algo text { font-size: 11px; fill: var(--muted); }
+.algo .live { background: #e8f0fe; border-radius: 4px; padding: 6px 8px; font-size: 14px; }
 .limits { color: var(--muted); font-size: 14px; }
 
 @media (max-width: 760px) {

@@ -60,7 +60,7 @@ function best_route(graph, start, goal, cost) {
   if (best[goal] === undefined) return null;
   const edges = [];
   for (let n = goal; n !== start; n = came_from[n].node) edges.unshift(came_from[n].edge);
-  return { cost: best[goal], edges };
+  return { cost: best[goal], edges, explored: done.size };
 }
 
 if (typeof module === "object") module.exports = { trilaterate, live_speeds, colour, predict_speed, best_route };
